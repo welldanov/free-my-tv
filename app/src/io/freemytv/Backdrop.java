@@ -56,6 +56,13 @@ final class Backdrop {
     /** `lightBg` and `nightBg` (bw × bh): the background itself, when it isn't the frosted version. */
     private Backdrop(Bitmap image, int[] frost, int[] glass, Bitmap wide, int[] light, int[] lightGlass,
                      int[] night, int[] nightGlass, int[] lightBg, int[] nightBg, int bw, int bh) {
+        this(image, frost, glass, wide, light, lightGlass, night, nightGlass,
+                lightBg == null ? null : Bitmap.createBitmap(lightBg, bw, bh, Bitmap.Config.ARGB_8888),
+                nightBg == null ? null : Bitmap.createBitmap(nightBg, bw, bh, Bitmap.Config.ARGB_8888));
+    }
+
+    private Backdrop(Bitmap image, int[] frost, int[] glass, Bitmap wide, int[] light, int[] lightGlass,
+                     int[] night, int[] nightGlass, Bitmap lightBg, Bitmap nightBg) {
         this.image = image;
         this.frost = frost;
         this.glass = glass;
@@ -65,8 +72,8 @@ final class Backdrop {
         this.lightGlass = lightGlass;
         this.nightFrost = night;
         this.nightGlass = nightGlass;
-        lightImage = lightBg == null ? null : Bitmap.createBitmap(lightBg, bw, bh, Bitmap.Config.ARGB_8888);
-        nightImage = nightBg == null ? null : Bitmap.createBitmap(nightBg, bw, bh, Bitmap.Config.ARGB_8888);
+        lightImage = lightBg;
+        nightImage = nightBg;
     }
 
     static Backdrop make(Bitmap src, boolean forLight) {
@@ -74,7 +81,7 @@ final class Backdrop {
     }
 
     /**
-     * `own`: one of your photos (Photos). Its background is less blurred than a pick's; behind the clock, date and
+     * `own`: one of your photos (Photos). Its background preserves source resolution without blur; behind the clock, date and
      * weather it is whitened (darkened at night) as much as a pick's, so the text stays readable, then less toward the
      * right, so it still reads as your photo. The glass and the drawer stay as they are.
      */
@@ -82,7 +89,7 @@ final class Backdrop {
         // Cropped to 16:9 at the source's resolution first, then filtered down (no step over 2×).
         Bitmap crop = center(src, (float) W / H);
         if (crop != src) src.recycle();
-        Bitmap out = Ui.downscale(crop, W, H);
+        Bitmap out = own ? crop : Ui.downscale(crop, W, H);
         if (out != crop) crop.recycle();
         if (!out.isMutable()) {
             Bitmap copy = out.copy(Bitmap.Config.ARGB_8888, true);
@@ -100,10 +107,10 @@ final class Backdrop {
             int[] night = darken(frost.clone(), 0.76f);
             int[] nightGlass = darken(glass, 0.56f);
             if (own) {
-                int[] sharp = reduce(out, GW, GH, 1, 1);
-                int[] lightBg = ramp(sharp.clone(), 0.82f, 0.45f, true), nightBg = ramp(sharp, 0.76f, 0.5f, false);
-                out.recycle();
-                return new Backdrop(null, frost, null, wide, light, lightGlass, night, nightGlass, lightBg, nightBg, GW, GH);
+                Bitmap lightBg = clockScrim(out.copy(Bitmap.Config.ARGB_8888, true), true);
+                Bitmap nightBg = clockScrim(out, false);
+                return new Backdrop(null, frost, null, wide, light, lightGlass,
+                        night, nightGlass, lightBg, nightBg);
             }
             out.recycle();
             return new Backdrop(null, frost, null, wide, light, lightGlass, night, nightGlass);
@@ -216,17 +223,38 @@ final class Backdrop {
         return px;
     }
 
-    /** Whitens (or darkens) by `left` up to 45% of the width, easing to `right` by 70% (a GW × GH image). */
-    private static int[] ramp(int[] px, float left, float right, boolean light) {
-        int[] col = new int[GH];
-        for (int x = 0; x < GW; x++) {
-            float t = Math.max(0, Math.min(1, (x / (float) GW - 0.45f) / 0.25f));
-            float a = left + (right - left) * t * t * (3 - 2 * t);
-            for (int y = 0; y < GH; y++) col[y] = px[y * GW + x];
-            if (light) whiten(col, a); else darken(col, a);
-            for (int y = 0; y < GH; y++) px[y * GW + x] = col[y];
+    /** Tints a mutable photo one row at a time, then keeps only its full-resolution GPU copy. Consumes src. */
+    private static Bitmap clockScrim(Bitmap src, boolean light) {
+        int width = src.getWidth(), height = src.getHeight();
+        float[] amounts = new float[width];
+        for (int x = 0; x < width; x++) {
+            float start = light ? 0.28f : 0.45f;
+            float span = light ? 0.28f : 0.25f;
+            float t = Math.max(0, Math.min(1, (x / (float) width - start) / span));
+            if (light && t >= 1) break;
+
+            float ease = t * t * (3 - 2 * t);
+            amounts[x] = light
+                    ? 0.82f * (1 - ease)
+                    : 0.5776f + (0.38f - 0.5776f) * ease;
         }
-        return px;
+
+        int[] row = new int[width];
+        for (int y = 0; y < height; y++) {
+            src.getPixels(row, 0, width, 0, y, width, 1);
+            for (int x = 0; x < width; x++) {
+                float amount = amounts[x];
+                float keep = 1 - amount;
+                float base = light ? 255 * amount : 0;
+                int p = row[x];
+                int r = Math.round(((p >> 16) & 255) * keep + base);
+                int g = Math.round(((p >> 8) & 255) * keep + base);
+                int b = Math.round((p & 255) * keep + base);
+                row[x] = (p & 0xFF000000) | (r << 16) | (g << 8) | b;
+            }
+            src.setPixels(row, 0, width, 0, y, width, 1);
+        }
+        return gpu(src);
     }
 
     private static int[] whiten(int[] px, float amount) {
