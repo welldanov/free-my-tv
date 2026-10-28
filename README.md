@@ -24,7 +24,7 @@ Open source. Built with Claude Code. One button to undo.
 - **What's playing.** Music, a podcast or the radio going on in the background shows on the home screen and the screensaver: the title, the artist and the app, from any app that tells Android what it plays (*Home Settings*, off until you turn it on).
 - **Light by day, dark by night.** It follows your city's real sunset, the way your phone does.
 - **A screensaver to match.** Full-screen photos of the picks with a big glass clock. Optionally (*Watch from the screensaver*, in Home Settings), OK opens the title on screen in its app, and any other button just closes it.
-- **Your own photos** (Google TV and Android TV). Send them from your computer (up to 100): the screensaver shows them, and without picks one is the home screen's background each hour.
+- **Your own photos** (Google TV and Android TV). Send them from your computer (up to 100): the screensaver shows them, and without picks one is the home screen's background each day.
 - **Fast.** 60 fps, every frame in 16.6 ms, on the TV's own chip. The home screen uses 96 MB of memory instead of 242 MB (−60%).<br><sub>Measured on a 98″ TCL Google TV running Android 14.</sub>
 - **Set up on the TV.** Language, your city, temperature, theme, how many picks and which streaming services they come from, the weather and prices cards, the forecast's hours or days, which coins, and the apps on the shelf, in Free My TV's own settings.
 - **Safe.** No root. Nothing is uninstalled. One button brings back the factory home screen.
@@ -178,6 +178,24 @@ On LG and Samsung you can also type it on the TV, in *Home Settings* → *TMDB k
 
 With a free [Watchmode](https://api.watchmode.com/) key (`watchmode_key=` in `config.properties`), a pick opens its own page in the streaming app instead of the app's home. The free plan (2,500 credits a month) is enough: each title costs two requests the first time and is remembered after that. It works where the app takes the title's web address (tested: Prime Video and JioHotstar); where it doesn't, the pick just opens the app, as without a key.
 
+### Daily photo collections over ADB
+
+The home screen cycles through My Photos once per local calendar day. The screensaver repeats the same daily image, with its existing slow motion. To replace the collection and start with its first image today:
+
+```sh
+python3 tools/photo-cycle.py --serial <connected-adb-serial> /path/to/Wallpapers/
+```
+
+Use filenames such as `001-forest.png`, `002-mountains.png`, `003-sea.png`; a folder is sorted by filename. Alternatively, pass individual files in the desired order. Reorder or change the files on your computer, then run the command again. A successful replacement resets the cycle to day one; rebooting does not. Days when the TV is off still count. The PC can disconnect afterwards.
+
+The command downloads and verifies the previous collection into `backups/photo-cycle-.../photos.zip` before replacing anything. All new images are decoded in staging before the collection is published; a failed upload or invalid image leaves the current collection active. One previous collection also remains in private app storage. Restore the downloaded backup (and its start date) with:
+
+```sh
+python3 tools/photo-cycle.py --serial <connected-adb-serial> --restore backups/photo-cycle-.../photos.zip
+```
+
+Requires this modified APK. Use 1–100 images, at most 512 MiB of source data. Full HD 16:9 images are sufficient for the home screen. The existing `photos.py` command still appends photos; use `photo-cycle.py` to replace/reorder and restart the daily cycle.
+
 ### Your own photos (optional)
 
 On Google TV and Android TV, with the TV connected over adb (see *Install*), send photos or whole folders from your computer:
@@ -186,7 +204,7 @@ On Google TV and Android TV, with the TV connected over adb (see *Install*), sen
 python3 tools/photos.py <TV IP> beach.jpg hills.jpg Holidays/
 ```
 
-They land in the app's own folder on the TV (no permission needed); on Android 11, which keeps adb out of other apps' folders, they go through Free My TV itself. The next time the home screen, the screensaver or Free My TV's settings open, the app imports each one: turned upright, cropped to 16:9, resized for the TV and saved without its GPS and other tags; what was sent is then deleted. The screensaver shows them in the order you sent them, instead of the picks' photos; without a TMDB key, one of them is the home screen's background, a new one every hour. *Home Settings* → *My Photos*: the arrows turn them on or off, OK removes them. Up to 100; JPEG, PNG and WebP, and HEIC on Android 9 and newer.
+They land in the app's own folder on the TV (no permission needed); on Android 11, which keeps adb out of other apps' folders, they go through Free My TV itself. The next time the home screen, the screensaver or Free My TV's settings open, the app imports each one: turned upright, cropped to 16:9, resized for the TV and saved without its GPS and other tags; what was sent is then deleted. The screensaver shows only today's photo, instead of the picks' photos; without a TMDB key, one of them is the home screen's background, a new one every local calendar day. *Home Settings* → *My Photos*: the arrows turn them on or off, OK removes them. Up to 100; JPEG, PNG and WebP, and HEIC on Android 9 and newer.
 
 ### Your Plex library (optional)
 

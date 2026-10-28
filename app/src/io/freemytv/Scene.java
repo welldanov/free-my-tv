@@ -39,7 +39,7 @@ final class Scene {
     private float speed = 1, baseDim, dim, time;
     private boolean auroraDirty = true, imageFrost, imageGlass;
     private Bitmap frostImage, glassA, glassB;
-    private BitmapShader glassShaderA;
+    private BitmapShader glassShaderA, glassShaderB;
     private final boolean withGlass;
 
     // --- Without AGSL: the glass drawn with bitmaps
@@ -54,6 +54,7 @@ final class Scene {
     private Bitmap softA, softB, softFrost;               // reused small bitmaps
     private BitmapShader softShaderA, softShaderB, softShaderFrost;   // remade after each setPixels (a shader keeps the pixels as they were)
     private float glassMix, offX, offY;
+    private long textGlassVersion;
 
     Scene() {
         this(true);
@@ -152,6 +153,7 @@ final class Scene {
 
     /** Photo transition: both photos in the glass, blended by setGlassMix (0 = the first one). */
     void setGlassImages(int[] from, int[] to) {
+        textGlassVersion++;
         imageGlass = true;
         glassMix = 0;
         if (liquid == null) {           // no AGSL (Android 8 to 12): the bitmaps path reads small soft copies instead
@@ -171,18 +173,37 @@ final class Scene {
         if (to != null) glassB = fill(glassB, to);
         glassShaderA = linear(glassA);
         liquid.setInputShader("imageA", glassShaderA);
-        liquid.setInputShader("imageB", to != null ? linear(glassB) : glassShaderA);
+        glassShaderB = to != null ? linear(glassB) : glassShaderA;
+        liquid.setInputShader("imageB", glassShaderB);
         liquid.setFloatUniform("mixB", 0);
         liquid.setFloatUniform("imageScale", (float) Backdrop.GW / w, (float) Backdrop.GH / h);
     }
 
+    /** Home text shares the shelf's 480x270 background; called only when its cached layer is redrawn. */
+    boolean hasTextGlass() { return imageGlass && glassShaderA != null; }
+    long textGlassVersion() { return textGlassVersion; }
+
+    boolean bindTextGlass(RuntimeShader text) {
+        if (!imageGlass || glassShaderA == null) return false;
+        // The text moves as a frozen layer with the drawer; always sample its resting position.
+        text.setInputShader("imageA", glassShaderA);
+        text.setInputShader("imageB", glassShaderB != null ? glassShaderB : glassShaderA);
+        text.setFloatUniform("placeA", 0, 0, (float) w / Backdrop.GW);
+        text.setFloatUniform("placeB", 0, 0, (float) w / Backdrop.GW);
+        text.setFloatUniform("mixB", glassMix);
+        return true;
+    }
+
     void setGlassMix(float t) {
-        glassMix = Math.max(0, Math.min(1, t));
+        float next = Math.max(0, Math.min(1, t));
+        if (next != glassMix) textGlassVersion++;
+        glassMix = next;
         if (liquid != null) liquid.setFloatUniform("mixB", glassMix);
     }
 
     /** The liquid glass goes back to the frosted aurora. */
     void clearGlass() {
+        textGlassVersion++;
         if (!imageGlass) return;
         imageGlass = false;
         advance(time);

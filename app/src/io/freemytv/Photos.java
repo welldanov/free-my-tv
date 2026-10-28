@@ -27,8 +27,8 @@ import java.util.concurrent.Executors;
  * next time the home screen, the screensaver or the settings open, each one is imported once into the app's private
  * folder, turned upright (EXIF) and saved losslessly at its original size (which also drops its GPS and
  * other tags), and the original is deleted. While they are on (Home Settings > My Photos), the screensaver shows them
- * instead of the picks' photos, in the order they came, and without picks (no TMDB key) one of them is the home
- * screen's background, a new one every hour.
+ * instead of the picks' photos: the same daily photo as the home screen's background without picks (no TMDB key),
+ * a new one every local calendar day.
  */
 final class Photos {
     private Photos() {}
@@ -40,7 +40,7 @@ final class Photos {
     /** Smaller ones are icons and thumbnails, not photos. */
     private static final int MIN_SIDE = 640;
 
-    private static File dir(Context c) {
+    static File dir(Context c) {
         return new File(c.getFilesDir(), "photos");
     }
 
@@ -79,6 +79,7 @@ final class Photos {
 
     /** The imported photos, in the order they came (one stat of the folder while nothing changed). */
     static synchronized List<File> files(Context c) {
+        PhotoCollection.recover(c);
         File d = dir(c);
         long stamp = d.exists() ? d.lastModified() : 0;
         if (stamp != listedStamp) {
@@ -97,18 +98,22 @@ final class Photos {
         return Prefs.photos() && !files(c).isEmpty();
     }
 
-    /** For the screensaver: the photos as picks (no title, no caption). */
+    /** Shared daily selection for Home and the screensaver. Call only with a nonempty collection. */
+    private static File today(Context c) {
+        List<File> list = files(c);
+        return list.get(PhotoCollection.index(c, list.size()));
+    }
+
+    /** For the screensaver: only today's photo (no title, no caption); keep its collection index as the key. */
     static List<Recs.Pick> picks(Context c) {
         List<Recs.Pick> out = new ArrayList<>();
         if (!on(c)) return out;
-        List<File> list = files(c);
-        for (int i = 0; i < list.size(); i++) {
-            Recs.Pick p = new Recs.Pick();
-            p.kind = "photo";
-            p.id = i;
-            p.photo = list.get(i);
-            out.add(p);
-        }
+        File photo = today(c);
+        Recs.Pick p = new Recs.Pick();
+        p.kind = "photo";
+        p.id = files(c).indexOf(photo);
+        p.photo = photo;
+        out.add(p);
         return out;
     }
 
@@ -120,8 +125,8 @@ final class Photos {
     private static Backdrop backdrop;
 
     /**
-     * This hour's photo, ready to draw as the home screen's background, or null (off, or the first one still being
-     * built). When the hour changes, the previous one stays until the new one is ready; then `ready` runs.
+     * Today's photo, ready to draw as the home screen's background, or null (off, or the first one still being
+     * built). When the date changes, the previous one stays until the new one is ready; then `ready` runs.
      */
     static synchronized Backdrop backdrop(Context c, Runnable ready) {
         if (!on(c)) {
@@ -129,16 +134,15 @@ final class Photos {
             built = null;
             return null;
         }
-        List<File> list = files(c);
-        File want = list.get((int) ((System.currentTimeMillis() / 3_600_000L) % list.size()));
+        File want = today(c);
         if (!want.equals(built) && !want.equals(building)) {
             building = want;
             worker.execute(() -> {
                 Backdrop b = null;
                 try {
-                    Bitmap src = BitmapFactory.decodeFile(want.getPath());
+                    Bitmap src = decodeHome(want);
                     if (src != null) b = Backdrop.make(src, true, true);
-                } catch (RuntimeException | OutOfMemoryError e) {
+                } catch (IOException | RuntimeException | OutOfMemoryError e) {
                     AppLog.w("photos: background from " + want.getName() + ": " + e.getMessage());
                 }
                 synchronized (Photos.class) {
@@ -268,6 +272,12 @@ final class Photos {
 
     /** Deletes the imported photos and whatever is still waiting, half-sent ones included. */
     static void removeAll(Context c) {
+        try {
+            PhotoCollection.forgetPrevious(c);
+        } catch (IOException e) {
+            AppLog.w("photos: cannot remove previous collection: " + e.getMessage());
+            return;
+        }
         clear(dir(c));
         clear(privateInbox(c));
         File in = inbox(c);
@@ -284,12 +294,23 @@ final class Photos {
                 || (Build.VERSION.SDK_INT >= 28 && (name.endsWith(".heic") || name.endsWith(".heif")));
     }
 
-    /** Preserve source pixels and dimensions; the home view handles the display crop. */
-    private static Bitmap decode(File f) throws IOException {
+    /** Sample before allocating pixels; imported photos are already upright. */
+    private static Bitmap decodeHome(File f) throws IOException {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(f.getPath(), bounds);
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = PhotoDecode.homeSampleSize(bounds.outWidth, bounds.outHeight);
+        return BitmapFactory.decodeFile(f.getPath(), options);
+    }
+
+    /** Preserve accepted source pixels and dimensions; reject oversized originals before allocation. */
+    static Bitmap decode(File f) throws IOException {
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(f.getPath(), bounds);
         if (Math.min(bounds.outWidth, bounds.outHeight) < MIN_SIDE) return null;
+        PhotoDecode.checkSize(bounds.outWidth, bounds.outHeight);
         Bitmap src = BitmapFactory.decodeFile(f.getPath());
         if (src == null) return null;
         int degrees = rotation(f);

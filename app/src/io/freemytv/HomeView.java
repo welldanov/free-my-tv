@@ -429,6 +429,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     void resume() {
         if (running) return;
         running = true;
+        invalidateHomeGlass();
         checkNight(false);
         boolean h24 = Prefs.clock24();
         if (h24 != clock24) {   // 12/24 hours changed in the TV's settings: the clock and the drawer's times again
@@ -489,6 +490,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     void destroy() {
         pause();
+        homeClockGlass.clear();
+        homeDateGlass.clear();
+        homeWeatherGlass.clear();
         if (launcherApps != null) launcherApps.unregisterCallback(packages);
         click.release();
     }
@@ -623,6 +627,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     }
 
     private void makePaints() {
+        homeClockGlass.clear();
+        homeDateGlass.clear();
+        homeWeatherGlass.clear();
         labelPaint = Ui.text(Ui.medium, 25 * k, 0xC7FFFFFF);
         labelPaint.setLetterSpacing(0.1f);
         titlePaint = new TextPaint(Ui.text(Ui.displayMedium, 76 * k, 0xFFFFFFFF));
@@ -643,7 +650,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         lTip = Ui.text(Ui.semibold, 25 * k, L_INK);
         lTip.setTextAlign(Paint.Align.CENTER);
         lDate = Ui.text(Ui.semibold, 34 * k, L_DIM);
-        lClock = Ui.numbers(Ui.light, 200 * k, L_INK);
+        lClock = Ui.numbers(Ui.displaySemibold, 200 * k, L_INK);
         lClock.setLetterSpacing(-0.01f);
         lWeather = Ui.text(Ui.medium, 34 * k, L_DIM);
         lClockQuote = Ui.numbers(Ui.medium, 28 * k, L_DIM);
@@ -708,7 +715,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean heroMoving = heroFocus.step(dt);
         boolean topMoving = step(topFocus, dt), cardsMoving = step(cardFocus, dt) | step(cardOpen, dt) | cardScroll.step(dt);
         if (topMoving) status.invalidate();
-        heroMoving |= topMoving | cardsMoving;
+        heroMoving |= (picksOn() && topMoving) | cardsMoving;
         boolean drawerItemsMoving = step(drawerFocus, dt);
         boolean gridMoving = step(gridFocus, dt) | scroll.step(dt);
         boolean drawerMoving = drawer.step(dt);
@@ -725,7 +732,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         // glass shows the background where it ended up.
         if (tilesMoving || tilesDirty) tiles.invalidate();
         if (statusMoving || statusDirty || bgFading) status.invalidate();
-        if (heroMoving || heroDirty || heroFading) heroLayer.invalidate();
+        if (heroMoving || heroDirty || heroFading || (bgFading && !picksOn())) heroLayer.invalidate();
         if (drawerItemsMoving || drawerDirty || bgFading) drawerLayer.invalidate();
         if (gridMoving || gridDirty) sheetLayer.invalidate();
         if (drawerMoving || bgFading) sky.invalidate();
@@ -743,7 +750,8 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         }
 
         // Busy: something is moving, or the sheet or the drawer is open.
-        boolean busy = tilesMoving || statusMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving
+        // Top-button focus animates independently of the hero when recommendations are off.
+        boolean busy = tilesMoving || statusMoving || topMoving || heroMoving || drawerItemsMoving || gridMoving || drawerMoving
                 || sheetMoving || toastFading || heroFading || bgFading || nightMoving || sheetOpen || sheet.value > 0.001f
                 || drawerOpen || drawer.value > 0.001f || toast != null || !toasts.isEmpty();
         idle = !busy;
@@ -771,6 +779,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         float home = 1 - s, top = home * (1 - smoothstep(0, 0.32f, dc));
         float shift = SHIFT * k;
         float lift = -d * shift;
+        if (top > 0.002f && heroLayer.getVisibility() != VISIBLE) {
+            invalidateHomeGlass();
+            heroDirty = true;
+        }
         show(heroLayer, top, lift);
         show(status, top, lift);
         show(platter, home, lift);
@@ -794,7 +806,9 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
     private void settleWhileSliding() {
         if (drawer.settled()) return;
         if (settle(drawerFocus)) drawerDirty = true;
-        if (settle(cardFocus) | settle(topFocus)) heroDirty = statusDirty = true;
+        boolean cardsSettled = settle(cardFocus), topSettled = settle(topFocus);
+        if (cardsSettled || (picksOn() && topSettled)) heroDirty = true;
+        if (topSettled) statusDirty = true;
         if (settle(statusFocus)) statusDirty = true;
         if (!heroFocus.settled()) {
             heroFocus.snap(heroFocus.target);
@@ -826,6 +840,16 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         sleepText = text;
         statusDirty = true;
     }
+
+    private void invalidateHomeGlass() {
+        homeClockGlass.invalidateResult();
+        homeDateGlass.invalidateResult();
+        homeWeatherGlass.invalidateResult();
+    }
+
+    private final HomeGlassText homeClockGlass = new HomeGlassText(LOADER, handler, () -> { heroDirty = true; wake(); });
+    private final HomeGlassText homeDateGlass = new HomeGlassText(LOADER, handler, () -> { heroDirty = true; wake(); });
+    private final HomeGlassText homeWeatherGlass = new HomeGlassText(LOADER, handler, () -> { heroDirty = true; wake(); });
 
     private boolean updateClock() {
         long now = System.currentTimeMillis();
@@ -1959,7 +1983,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         heroFocus.target = !sheetOpen && zone == Z_HERO ? 1 : 0;
         if (snap) heroFocus.snap(heroFocus.target);
         boolean topChanged = aim(topFocus, !sheetOpen && zone == Z_TOP ? topIndex : -1, snap);
-        heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | topChanged;
+        heroChanged |= aim(cardFocus, !sheetOpen && zone == Z_CARDS ? cardIndex : -1, snap) | (picksOn() && topChanged);
         heroChanged |= aim(cardOpen, cardIndex, snap);
         float scrollTo = Math.max(0, cardIndex - 2);
         heroChanged |= cardScroll.target != scrollTo;
@@ -3036,7 +3060,7 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
         boolean own = !picksOn() && Photos.on(getContext());
         Backdrop b = own ? Photos.backdrop(getContext(), ownReady) : cards.isEmpty() ? null : recs.backdrop(cards.get(0));
         if (b != null || (cards.isEmpty() && !own)) showBackdrop(b);
-        heroDirty = true;
+        heroDirty |= picksOn();
         spoken.focusMoved();    // new picks under the focused card
     }
 
@@ -3139,8 +3163,11 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
 
     private void drawClock(Canvas c) {
         float x = MARGIN * k;
-        c.drawText(dateText, x - Ui.leftBearing(lDate, dateText), L_DATE_BASE * k, lDate);
-        c.drawText(clockText, x - Ui.leftBearing(lClock, clockText), L_CLOCK_BASE * k, lClock);
+        int ink = tone(0xFF25252A, 0xFFF5F5F7);
+        homeDateGlass.draw(c, scene, getContext(), dateText, null, lDate,
+                x, L_DATE_BASE * k, k, 0.62f, ink);
+        homeClockGlass.draw(c, scene, getContext(), clockText, null, lClock,
+                x, L_CLOCK_BASE * k, k, 0.55f - 0.5f * dark(), ink);
         HomeData.Weather wx = data.weather;
         if (!Prefs.weather() || Double.isNaN(wx.temp)) return;
         if (data.weatherAt != weatherLineAt || Prefs.version != weatherLinePrefs || !Ui.language.equals(weatherLineLanguage)) {
@@ -3150,11 +3177,10 @@ final class HomeView extends ViewGroup implements Choreographer.FrameCallback, H
             weatherLine = HomeData.degrees(wx.temp) + "  " + HomeData.condition(wx.code, wx.isDay) + "   "
                     + HomeData.highLow(wx, "  ");
         }
-        float size = 40 * k, base = L_WEATHER_BASE * k;
+        float base = L_WEATHER_BASE * k;
         String symbol = Symbols.weather(wx.code, wx.isDay);
-        float sw = Symbols.width(getContext(), symbol, size);
-        Symbols.draw(getContext(), c, symbol, x + sw / 2, base - Ui.halfCap(lWeather), size, lWeather.getColor());
-        c.drawText(weatherLine, x + sw + 16 * k, base, lWeather);
+        homeWeatherGlass.draw(c, scene, getContext(), weatherLine, symbol, lWeather,
+                x, base, k, 0.62f, ink);
     }
 
     /**

@@ -81,7 +81,7 @@ final class Backdrop {
     }
 
     /**
-     * `own`: one of your photos (Photos). Its background preserves source resolution without blur; behind the clock, date and
+     * `own`: one of your photos (Photos). Its background is capped at 1920×1080 without blur or upscaling; behind the clock, date and
      * weather it is whitened (darkened at night) as much as a pick's, so the text stays readable, then less toward the
      * right, so it still reads as your photo. The glass and the drawer stay as they are.
      */
@@ -89,7 +89,10 @@ final class Backdrop {
         // Cropped to 16:9 at the source's resolution first, then filtered down (no step over 2×).
         Bitmap crop = center(src, (float) W / H);
         if (crop != src) src.recycle();
-        Bitmap out = own ? crop : Ui.downscale(crop, W, H);
+        // Small own photos keep their cropped native size; larger ones need no more than Full HD for Home.
+        Bitmap out = own
+                ? (crop.getWidth() <= 1920 && crop.getHeight() <= 1080 ? crop : Ui.downscale(crop, 1920, 1080))
+                : Ui.downscale(crop, W, H);
         if (out != crop) crop.recycle();
         if (!out.isMutable()) {
             Bitmap copy = out.copy(Bitmap.Config.ARGB_8888, true);
@@ -175,7 +178,7 @@ final class Backdrop {
         if (out != b) b.recycle();
         if (light != null && light.length >= 2) {
             light[0] = luminance(out, 0, 0.6f, 0.5f, 0.95f);
-            light[1] = luminance(out, 0.62f, 0.04f, 0.96f, 0.36f);
+            light[1] = luminance(out, 0.02f, 0.25f, 0.45f, 0.65f);
         }
         int fw = w / PHOTO_FROST, fh = h / PHOTO_FROST;
         Bitmap frost = Bitmap.createBitmap(reduce(out, fw, fh, 3, 2), fw, fh, Bitmap.Config.ARGB_8888);

@@ -34,8 +34,8 @@ import java.util.concurrent.Executors;
  *  - the recommendations' photos in full screen, one every 30 s, with a slow zoom and pan (the "Ken Burns" effect of
  *    the Apple TV photos) and a crossfade between them; each photo is loaded 10% larger than the screen, so the zoom
  *    never upscales it;
- *  - top right, like the iPhone lock screen: the date with the weather, the big Liquid Glass clock (the photo shows
- *    through the digits, bent at the edges; Shaders.GLASS_TEXT) and the compact prices;
+ *  - center left, aligned with Home: the date, the big Liquid Glass clock (the photo shows
+ *    through the digits, bent at the edges; Shaders.GLASS_TEXT) with weather and compact prices below;
  *  - bottom left, the photo's caption: the time-of-day label ("TONIGHT"), the title, and genre · runtime · service.
  * Dark scrims only where there is text, stronger where the photo is bright. Any key exits (as on Apple TV); with Watch
  * from the screensaver on (Prefs.saverWatch), OK first opens the title in its app, and the caption says so.
@@ -47,8 +47,8 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
     private static final float ZOOM = 0.1f;
     /** Photos 10% larger than the screen (the zoom goes up to 1.1 without upscaling). */
     private static final int PW = 2112, PH = 1188;
-    private static final float MARGIN = 80, RIGHT = 1840, TITLE_W = 900, META_BASE = 1008;
-    private static final float DATE_BASE = 92, CLOCK_TOP = 120, CLOCK_SIZE = 200, QUOTES_GAP = 52;
+    private static final float MARGIN = 80, TITLE_W = 900, META_BASE = 1008;
+    private static final float DATE_BASE = 626, CLOCK_BASE = 540, CLOCK_SIZE = 200, QUOTES_BASE = 694;
     private static final double DRIFT_PERIOD_S = 600;
     // The high and low and the stale prices line, made again only when they change (drawn on every frame).
     private String range = "", staleLine = "", staleFor = "";
@@ -259,6 +259,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         cornerQuote = Ui.numbers(Ui.regular, 23 * k, 0xC7FFFFFF);
         cornerStale = Ui.text(Ui.medium, 21 * k, 0x99FFFFFF);
         cornerClock = Ui.numbers(Ui.displaySemibold, CLOCK_SIZE * k, 0xF2FFFFFF);
+        cornerClock.setLetterSpacing(-0.01f);
         labelPaint = Ui.text(Ui.medium, 25 * k, 0xB8FFFFFF);
         labelPaint.setLetterSpacing(0.1f);
         titlePaint = new TextPaint(Ui.text(Ui.displayMedium, 76 * k, 0xFFFFFFFF));
@@ -472,7 +473,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         chrome.setAlpha(first);
         chrome.draw(canvas);
         if (playingCorner != null) {
-            float x = RIGHT * k - playingCornerWidth - cornerCap * 0.6f - NowPlaying.barsWidth(cornerCap);
+            float x = MARGIN * k;
             drawBars(canvas, x, cornerBase, cornerCap, cornerQuote.getColor(), first);
         }
         drawGlass(canvas, first, e);
@@ -494,7 +495,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         playingBottomWidth = quotePaint.measureText(playingBottom);
         cornerCap = Ui.cap(cornerQuote);
         bottomCap = Ui.cap(quotePaint);
-        cornerBase = (CLOCK_TOP + Ui.cap(cornerClock) / k + QUOTES_GAP) * k;
+        cornerBase = QUOTES_BASE * k;
     }
 
     private void drawBars(Canvas c, float x, float base, float cap, int color, float alpha) {
@@ -532,7 +533,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         p.setShader(new LinearGradient(0, 0, 0, h * 0.3f, new int[] {black(0.3f), black(0.075f), 0},
                 new float[] {0, 0.45f, 1}, Shader.TileMode.CLAMP));
         c.drawRect(0, 0, w, h * 0.3f, p);
-        float cx = w * 0.86f, cy = h * 0.15f;
+        float cx = w * 0.18f, cy = h * 0.45f;
         RadialGradient clockSide = new RadialGradient(cx, cy, w * 0.36f,
                 new int[] {black(corner), black(0.6f * corner), black(0.15f * corner), 0},
                 new float[] {0, 0.42f, 0.75f, 1}, Shader.TileMode.CLAMP);
@@ -540,7 +541,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         mc.setScale(1, 0.72f, cx, cy);
         clockSide.setLocalMatrix(mc);
         p.setShader(clockSide);
-        c.drawRect(w * 0.5f, 0, w, cy + w * 0.36f * 0.72f, p);
+        c.drawRect(0, cy - w * 0.36f * 0.72f, cx + w * 0.36f, cy + w * 0.36f * 0.72f, p);
         return photo;
     }
 
@@ -557,20 +558,18 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
     private void recordChrome() {
         Canvas c = chrome.beginRecording(w, h);
         try {
-            float right = RIGHT * k;
-            float x = right;
+            float left = MARGIN * k;
+            float dateX = left - Ui.leftBearing(cornerDate, date);
+            c.drawText(date, dateX, DATE_BASE * k, cornerDate);
             HomeData.Weather wx = data.weather;
             if (!Double.isNaN(wx.temp) && Prefs.weather()) {
-                String temp = HomeData.degrees(wx.temp);
-                float tw = cornerDate.measureText(temp);
-                c.drawText(temp, x - tw, DATE_BASE * k, cornerDate);
-                x -= tw + 10 * k;
                 String symbol = Symbols.weather(wx.code, wx.isDay);
                 float size = 30 * k, sw = Symbols.width(getContext(), symbol, size);
-                Symbols.draw(getContext(), c, symbol, x - sw / 2, DATE_BASE * k - Ui.halfCap(cornerDate), size, 0xEBFFFFFF);
-                x -= sw + 26 * k;
+                float weatherX = dateX + cornerDate.measureText(date) + 26 * k;
+                Symbols.draw(getContext(), c, symbol, weatherX + sw / 2,
+                        DATE_BASE * k - Ui.halfCap(cornerDate), size, 0xEBFFFFFF);
+                c.drawText(HomeData.degrees(wx.temp), weatherX + sw + 10 * k, DATE_BASE * k, cornerDate);
             }
-            c.drawText(date, x - cornerDate.measureText(date), DATE_BASE * k, cornerDate);
 
             Glass g = glass;
             if (g != null && glassShader != null) {
@@ -578,17 +577,15 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
                 shadowPaint.setAlpha(140);
                 c.drawBitmap(g.shadow, g.x, g.y + 6 * k, shadowPaint);
             } else {
-                Rect ink = new Rect();
-                cornerClock.getTextBounds(clock, 0, clock.length(), ink);
-                c.drawText(clock, right - ink.right, CLOCK_TOP * k - ink.top, cornerClock);
+                c.drawText(clock, left - Ui.leftBearing(cornerClock, clock), CLOCK_BASE * k, cornerClock);
             }
 
-            // Compact prices under the clock, right-aligned.
-            float base = (CLOCK_TOP + Ui.cap(cornerClock) / k + QUOTES_GAP) * k;
+            // Compact prices below the weather, left-aligned.
+            float base = QUOTES_BASE * k;
             float cap = Ui.cap(cornerQuote), gap = 7 * k, spacing = 26 * k;
             int[] coins = HomeData.active();
             int n = playingCorner != null ? 0 : HomeData.coinCount();   // what an app is playing takes their place
-            if (playingCorner != null) c.drawText(playingCorner, right - playingCornerWidth, base, cornerQuote);
+            if (playingCorner != null) c.drawText(playingCorner, left + cornerCap * 0.6f + NowPlaying.barsWidth(cornerCap), base, cornerQuote);
             String[] values = new String[n];
             float[] glyphs = new float[n];
             float total = spacing * (n - 1);
@@ -597,7 +594,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
                 glyphs[i] = Glyphs.width(getContext(), HomeData.COINS[coins[i]], cap);
                 total += glyphs[i] + gap + cornerQuote.measureText(values[i]);
             }
-            float qx = right - total;
+            float qx = left;
             for (int i = 0; i < n; i++) {
                 Glyphs.coin(getContext(), c, HomeData.COINS[coins[i]], qx + glyphs[i] / 2, base - cap / 2, cap, 0xA6FFFFFF);
                 qx += glyphs[i] + gap;
@@ -605,7 +602,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
                 qx += cornerQuote.measureText(values[i]) + spacing;
             }
             String stale = HomeData.staleness(data.pricesAt, 5 * 60_000L);
-            if (!stale.isEmpty() && n > 0) c.drawText(stale, right - total - 24 * k - cornerStale.measureText(stale), base, cornerStale);
+            if (!stale.isEmpty() && n > 0) c.drawText(stale, left + total + 24 * k, base, cornerStale);
         } finally {
             chrome.endRecording();
         }
@@ -639,10 +636,10 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
         final Paint paint = new Paint(cornerClock);
         paint.clearShadowLayer();
         paint.setColor(0xFFFFFFFF);
-        final float right = RIGHT * k, top = CLOCK_TOP * k, scale = k;
+        final float left = MARGIN * k, baseline = CLOCK_BASE * k, scale = k;
         final int gen = generation;
         worker.execute(() -> {
-            Glass g = makeGlass(text, paint, right, top, scale);
+            Glass g = makeGlass(text, paint, left, baseline, scale);
             handler.post(() -> {
                 if (gen != generation || !text.equals(glassFor)) return;
                 glass = g;
@@ -664,7 +661,7 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
      * The sharp rendering of the digits, the surface height (the blurred rendering: 0.5 at the edge, 1 in the middle of
      * the strokes), its slope (for the lens and the highlight) and the shadow.
      */
-    private static Glass makeGlass(String text, Paint paint, float right, float top, float k) {
+    private static Glass makeGlass(String text, Paint paint, float left, float baseline, float k) {
         Rect ink = new Rect();
         paint.getTextBounds(text, 0, text.length(), ink);
         int pad = Math.round(40 * k);
@@ -697,7 +694,8 @@ final class DreamView extends View implements Choreographer.FrameCallback, HomeD
                 shadow[i] = Math.min(255, soft[i] / 16) << 24;
             }
         }
-        int x = Math.round(right - ink.width()) - pad, y = Math.round(top) - pad;
+        int x = Math.round(left - Ui.leftBearing(paint, text) + ink.left) - pad;
+        int y = Math.round(baseline + ink.top) - pad;
         return new Glass(text, Bitmap.createBitmap(slope, w, h, Bitmap.Config.ARGB_8888), cover,
                 Bitmap.createBitmap(shadow, w, h, Bitmap.Config.ARGB_8888), x, y, pad, Math.max(1, ink.height()));
     }

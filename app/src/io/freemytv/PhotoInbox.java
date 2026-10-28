@@ -5,6 +5,7 @@ import android.content.ContentValues;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
@@ -40,25 +41,55 @@ public class PhotoInbox extends ContentProvider {
         int caller = Binder.getCallingUid();
         if (caller != SHELL_UID && caller != 0) throw new SecurityException("only adb sends photos");
         String name = uri.getLastPathSegment();
+        if ("backup.zip".equals(name) && "r".equals(mode)) {
+            try {
+                File backup = PhotoCollection.backup(getContext());
+                ParcelFileDescriptor descriptor = ParcelFileDescriptor.open(backup, ParcelFileDescriptor.MODE_READ_ONLY);
+                backup.delete(); // The open descriptor stays readable; no exported ZIP is left on the TV.
+                return descriptor;
+            } catch (IOException e) { throw new FileNotFoundException(e.getMessage()); }
+        }
         if (name == null || name.isEmpty() || name.contains("/") || name.startsWith(".") || !mode.contains("w")) {
             throw new FileNotFoundException("photos only: content://io.freemytv.photos/<name>");
         }
-        File in = Photos.privateInbox(getContext());
+        boolean collection = "collection.zip".equals(name);
+        File in = collection ? getContext().getFilesDir() : Photos.privateInbox(getContext());
         if (!in.isDirectory() && !in.mkdirs()) throw new FileNotFoundException("can't create " + in);
         long expected = size(uri);
         // Written under a hidden name (an import meanwhile leaves it alone) and named only once all of it came: a send
         // cut short (Ctrl-C, Wi-Fi) also closes cleanly. Imported like a pushed photo, at the next open: an import here,
         // in the main process, could save its stale copy of the settings over :home's (Prefs.setPhotos).
-        File part = new File(in, "." + name), done = new File(in, name);
+        File done = collection ? PhotoCollection.transfer(getContext()) : new File(in, name);
+        File part = new File(in, "." + done.getName());
+        if (collection && done.exists() && !done.delete()) throw new FileNotFoundException("cannot clear old transfer");
         try {
             return ParcelFileDescriptor.open(part, ParcelFileDescriptor.MODE_WRITE_ONLY | ParcelFileDescriptor.MODE_CREATE
                     | ParcelFileDescriptor.MODE_TRUNCATE, new Handler(Looper.getMainLooper()), e -> {
                         boolean whole = e == null && (expected < 0 || part.length() == expected);
+                        if (!whole) AppLog.w("photos: incomplete transfer " + part.length() + "/" + expected + ": " + e);
                         if (!whole || !part.renameTo(done)) part.delete();
                     });
         } catch (IOException e) {
             throw new FileNotFoundException(e.getMessage());
         }
+    }
+
+    @Override public Bundle call(String method, String arg, Bundle extras) {
+        int caller = Binder.getCallingUid();
+        if (caller != SHELL_UID && caller != 0) throw new SecurityException("only adb manages photos");
+        Bundle result = new Bundle();
+        try {
+            if ("collection-status".equals(method)) {
+                result.putBoolean("ready", PhotoCollection.transfer(getContext()).isFile());
+            } else if ("replace-collection".equals(method) || "restore-collection".equals(method)) {
+                int count = PhotoCollection.replace(getContext(), "restore-collection".equals(method));
+                result.putInt("photos", count);
+                result.putBoolean("success", true);
+            } else return super.call(method, arg, extras);
+        } catch (IOException | RuntimeException e) {
+            result.putString("error", e.getMessage());
+        }
+        return result;
     }
 
     @Override public Cursor query(Uri uri, String[] projection, String selection, String[] args, String sort) { return null; }
